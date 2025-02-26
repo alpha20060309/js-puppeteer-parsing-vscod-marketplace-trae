@@ -43,9 +43,22 @@ The application uses a database connection configured in `src/config/database.js
    ```
 
 ## Features
-- Feature 1
-- Feature 2
-- Feature 3
+1. Database-only scraping:
+- Created`databaseScraper.js` that focuses solely on scraping extension data and saving it to SQLite database
+- Created`cli-db.js` as a separate entry point for database-only operations
+- Removed file system operations from this component
+2. File system operations:
+- The existing`extensionScraper.js` and`cli.js` remain for full functionality including file system operations
+- These will now use the URLs stored in the database to scrape and save HTML content
+The separation allows for:
+
+- Independent operation of database and file storage tasks
+- More modular and maintainable codebase
+- Ability to run database scraping separately from file operations
+Users can now choose between:
+
+- Running`cli-db.js` to only scrape and store data in the database
+- Running`cli.js` to perform full scraping with file system operations
 
 ## Technologies Used
 - Node.js

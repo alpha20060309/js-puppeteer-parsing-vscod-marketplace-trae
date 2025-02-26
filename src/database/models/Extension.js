@@ -86,7 +86,12 @@ const Extension = sequelize.define('Extension', {
   local_path: {
     type: DataTypes.TEXT,
     allowNull: true
+  },
+  is_created: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
   }
 });
 
-module.exports = Extension; 
+module.exports = Extension;

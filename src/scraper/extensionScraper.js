@@ -5,14 +5,28 @@ const path = require('path');
 class ExtensionScraper {
   async initialize() {
     this.browser = await puppeteer.launch({
-      headless: "new",  // "new" headless mode
+      headless: "new",
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
-        '--disable-gpu'
-      ]
+        '--disable-gpu',
+        '--disable-extensions',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-default-apps',
+        '--mute-audio',
+        '--no-default-browser-check',
+        '--no-first-run',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-background-networking',
+        '--disable-ipc-flooding-protection',
+        '--enable-features=NetworkService,NetworkServiceInProcess'
+      ],
+      ignoreHTTPSErrors: true,
+      defaultViewport: { width: 1920, height: 1080 }
     });
   }
 
@@ -20,10 +34,22 @@ class ExtensionScraper {
     try {
       const page = await this.browser.newPage();
       
-      await page.setDefaultNavigationTimeout(120000); // 60000 dan 120000 ga oshiramiz
-      await page.setDefaultTimeout(60000); // 30000 dan 60000 ga oshiramiz
+      await page.setDefaultNavigationTimeout(120000);
+      await page.setDefaultTimeout(60000);
       
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+      await Promise.all([
+        page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'),
+        page.setRequestInterception(true),
+        page.setCacheEnabled(true)
+      ]);
+
+      page.on('request', (request) => {
+        if (['image', 'stylesheet', 'font'].includes(request.resourceType())) {
+          request.abort();
+        } else {
+          request.continue();
+        }
+      });
       
       // Turli xil saralash usullari bilan qidirish
       const sortOptions = [
@@ -37,6 +63,7 @@ class ExtensionScraper {
       
       const processedUrls = new Set();
       let totalProcessed = 0;
+      const batchSize = 5; // Number of concurrent URL processing
       
       // Har bir saralash usuli bilan qidirish
       for (const sortOption of sortOptions) {
@@ -129,12 +156,15 @@ class ExtensionScraper {
             // Reset empty scroll counter if new URLs found
             consecutiveEmptyScrolls = 0;
             
-            // Process all new URLs before scrolling again
-            for (const url of unprocessedUrls) {
-              processedUrls.add(url);
-              console.log(`Murojaat qilinmoqda: ${url}`);
-              await this.saveExtensionContent(url, savePath);
-              totalProcessed++;
+            // Process URLs in parallel batches
+            for (let i = 0; i < unprocessedUrls.length; i += batchSize) {
+              const batch = unprocessedUrls.slice(i, i + batchSize);
+              await Promise.all(batch.map(async (url) => {
+                processedUrls.add(url);
+                console.log(`Murojaat qilinmoqda: ${url}`);
+                await this.saveExtensionContent(url, savePath);
+                totalProcessed++;
+              }));
             }
             
             console.log(`Jami qayta ishlangan URLlar: ${totalProcessed}`);
@@ -156,7 +186,6 @@ class ExtensionScraper {
       throw error;
     }
   }
-
   async saveExtensionContent(url, savePath) {
     try {
       // Extract identifier from URL
@@ -176,104 +205,64 @@ class ExtensionScraper {
       
       if (existingExtension) {
         console.log(`⚠️ Extension bazada mavjud: ${existingExtension.name} (${identifier})`);
-        return; // Skip processing if already exists
       }
       
-      // Continue with scraping if extension doesn't exist
+      // Continue with scraping
       const page = await this.browser.newPage();
       await page.goto(url, { waitUntil: 'networkidle0' });
       
-      // Extract all necessary data from the page based on the specified selectors
+      // Extract all necessary data from the page
       const extensionData = await page.evaluate((pageUrl) => {
-        // Function to safely extract text from a selector
         const getText = (selector) => {
           const element = document.querySelector(selector);
           return element ? element.textContent.trim() : '';
         };
         
-        // Function to safely extract number from text
-        const getNumber = (selector) => {
-          const text = getText(selector);
-          return text ? parseInt(text.replace(/[^0-9]/g, '')) : 0;
-        };
-        
-        // Function to extract array of items
-        const getArray = (selector) => {
-          const elements = document.querySelectorAll(selector);
-          return Array.from(elements).map(el => el.textContent.trim());
-        };
-        
-        // Extract identifier from URL or page
-        const getIdentifier = () => {
-          const url = window.location.href;
-          const match = url.match(/itemName=([^&]+)/);
-          return match ? match[1] : '';
-        };
-        
         return {
           name: getText('h1[itemprop="name"]') || getText('.ux-item-name'),
-          identifier: getIdentifier(),
-          description: getText('.ux-item-shortdesc') || getText('.ux-item-description'),
-          version: getText('.ux-item-meta-version') || getText('#version + td'),
-          author: getText('.ux-item-publisher') || getText('#publisher + td'),
-          url: pageUrl,
-          downloads: getNumber('.ux-item-meta-installs') || getNumber('.installs'),
-          installs: getNumber('.installs-text') || getNumber('.installs'),
-          last_updated: getText('.extension-last-updated-date') || getText('#last-updated + td'),
-          categories: getArray('.meta-data-list-link'),
-          rating: parseFloat(getText('.ux-item-rating-count') || getText('.rating')) || 0,
-          reviewCount: $(".ux-item-rating-count span").first().text().trim(),
-          tags: getArray('.meta-data-list'),
-          repository: getText('.ux-repository'),
-          licenseUrl : $('.ux-section-resources a').filter((_, el) => $(el).text().trim() === "License").attr("href")
+          identifier: pageUrl.match(/itemName=([^&]+)/)[1],
+          url: pageUrl
         };
       }, url);
       
+      // Get the full HTML content
       const htmlContent = await page.evaluate(() => document.documentElement.outerHTML);
       await page.close();
       
       // Create folder name based on extension name with regex sanitization
-      // Replace forward slashes with spaces and other problematic characters with underscores
       const folderName = extensionData.name
         .replace(/\//g, ' ')  // Replace forward slashes with spaces
         .replace(/[\\:*?"<>|]/g, '_');  // Replace other problematic characters with underscores
       const folderPath = path.join(savePath, folderName);
       
-      // Check if folder already exists
-      try {
-        const stats = await fs.stat(folderPath);
-        if (stats.isDirectory()) {
-          console.log(`⚠️ Folder mavjud: ${folderPath}, faqat bazaga saqlanadi`);
-          // Save to SQLite without creating folder
-          await this.saveToDatabase(extensionData, folderPath);
-          return;
-        }
-      } catch (err) {
-        // Folder doesn't exist, continue with creation
-        if (err.code !== 'ENOENT') {
-          throw err; // Re-throw if it's not a "not found" error
-        }
-      }
-      
-      // Save to file system
+      // Create folder if it doesn't exist
       await fs.mkdir(folderPath, { recursive: true });
-      await fs.writeFile(path.join(folderPath, 'content.html'), htmlContent);
       
-      // Create a Windows-compatible .url shortcut file
+      // Save HTML content
+      const htmlFilePath = path.join(folderPath, 'content.html');
+      await fs.writeFile(htmlFilePath, htmlContent, 'utf8');
+      console.log(`✅ HTML fayl saqlandi: ${htmlFilePath}`);
+      
+      // Create and save URL shortcut file
       const urlFilePath = path.join(folderPath, `${folderName}.url`);
       await fs.writeFile(urlFilePath, `[InternetShortcut]\nURL=${url}\n`, 'utf8');
-      
-      console.log(`✅ Saqlandi: ${extensionData.name} (${url})`);
       console.log(`🔗 URL fayl saqlandi: ${urlFilePath}`);
       
-      // Save to SQLite
-      await this.saveToDatabase(extensionData, folderPath);
+      // Update database record
+      if (existingExtension) {
+        await existingExtension.update({
+          local_path: folderPath,
+          is_created: true
+        });
+      }
       
+      console.log(`✅ Extension muvaffaqiyatli saqlandi: ${extensionData.name}`);
+      return true;
     } catch (error) {
-      console.error(`❌ Fayllarni saqlashda xatolik: ${url}`, error);
+      console.error(`❌ Extension saqlashda xatolik: ${url}`, error);
+      return false;
     }
   }
-
   async saveToDatabase(extensionData, localPath) {
     try {
       const Extension = require('../database/models/Extension');
@@ -308,7 +297,8 @@ class ExtensionScraper {
         tags: extensionData.tags && extensionData.tags.length > 0 ? extensionData.tags : null,
         repository: extensionData.repository || null,
         license: extensionData.license || null,
-        local_path: localPath || null
+        local_path: localPath || null,
+        is_created: true
       };
       
       // Ensure identifier is not null (required field)

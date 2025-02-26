@@ -7,7 +7,7 @@
     "vscode-scraper": "./src/cli.js"
   },
   "scripts": {
-    "start": "node src/cli.js \"C:\\Extensions\"",
+    "start": "node src/cli.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "preinstall": "npm install -g puppeteer sequelize sqlite3 dotenv",
     "postinstall": "node scripts/setup.js"
