@@ -1,0 +1,1 @@
+node cli-rescrape.js "d:\Smartscloud\"
